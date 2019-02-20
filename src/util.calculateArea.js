@@ -8,20 +8,20 @@ ymaps.modules.define('util.calculateArea', [], function (provide) {
     }
 
     function getGeoJsonGeometry(feature) {
-        if (feature.type == 'Feature') {
+        if (feature.type === 'Feature') {
             return feature.geometry;
         } else if (feature.geometry && feature.geometry.getType) {
-            if (feature.geometry.getType() == 'Circle') {
+            if (feature.geometry.getType() === 'Circle') {
                 return {
                     type: 'Circle',
                     coordinates: feature.geometry.getCoordinates(),
                     radius: feature.geometry.getRadius()
-                }
+                };
             }
             return {
                 type: feature.geometry.getType(),
                 coordinates: feature.geometry.getCoordinates()
-            }
+            };
         } else {
             throw new Error('util.calculateArea: Unknown input object.');
         }
@@ -32,6 +32,10 @@ ymaps.modules.define('util.calculateArea', [], function (provide) {
         var i;
         switch (geometry.type) {
             case 'Polygon':
+                if (isPolySelfIntersecting(geometry.coordinates)) {
+                    return null;
+                }
+
                 return polygonArea(geometry.coordinates);
             case 'MultiPolygon':
                 for (i = 0; i < geometry.coordinates.length; i++) {
@@ -59,9 +63,9 @@ ymaps.modules.define('util.calculateArea', [], function (provide) {
     function polygonArea(coords) {
         var area = 0;
         if (coords && coords.length > 0) {
-            area += Math.abs(ringArea(coords[0]));
-            for (var i = 1; i < coords.length; i++) {
-                area -= Math.abs(ringArea(coords[i]));
+            var signs = getRingsSigns(coords);
+            for (var i = 0; i < coords.length; i++) {
+                area += Math.abs(ringArea(coords[i])) * signs[i];
             }
         }
         return area;
@@ -93,8 +97,8 @@ ymaps.modules.define('util.calculateArea', [], function (provide) {
         var i;
         var area = 0;
         var coordsLength = coords.length;
-        var longitude = ymaps.meta.coordinatesOrder == 'latlong' ? 1 : 0;
-        var latitude = ymaps.meta.coordinatesOrder == 'latlong' ? 0 : 1;
+        var longitude = ymaps.meta.coordinatesOrder === 'latlong' ? 1 : 0;
+        var latitude = ymaps.meta.coordinatesOrder === 'latlong' ? 0 : 1;
 
         if (coordsLength > 2) {
             for (i = 0; i < coordsLength; i++) {
@@ -128,6 +132,95 @@ ymaps.modules.define('util.calculateArea', [], function (provide) {
 
     function rad(_) {
         return _ * Math.PI / 180;
+    }
+
+    function isPolySelfIntersecting(rings) {
+        for (var ri = 0; ri < rings.length; ri++) {
+            for (var rj = ri; rj < rings.length; rj++) {
+                var ring1 = rings[ri];
+                var ring2 = rings[rj];
+                for (var i = 0; i < ring1.length - 1; i++) {
+                    for (var j = 0; j < ring2.length - 1; j++) {
+                        if (ring1 === ring2 && (Math.abs(i - j) === 1 || Math.abs(i - j) === ring1.length - 2)) {
+                            continue;
+                        }
+
+                        if (linesIntersect(ring1[i][0], ring1[i][1], ring1[i + 1][0], ring1[i + 1][1],
+                            ring2[j][0], ring2[j][1], ring2[j + 1][0], ring2[j + 1][1])) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    function linesIntersect(ax0, ay0, ax1, ay1, bx0, by0, bx1, by1) {
+        var d = (ax1 - ax0) * (by0 - by1) - (ay1 - ay0) * (bx0 - bx1);
+        if (d === 0) {
+            return false;
+        }
+
+        var t = (bx0 - ax0) * (by0 - by1) - (by0 - ay0) * (bx0 - bx1);
+        var w = (ax1 - ax0) * (by0 - ay0) - (bx0 - ax0) * (ay1 - ay0);
+
+        t /= d;
+        w /= d;
+
+        return t >= 0 && t <= 1 && w >= 0 && w <= 1;
+    }
+
+    function getRingsSigns(poly) {
+        poly = geoCoords.geoPolyAsPixel(poly);
+        poly.forEach(function (ring) {
+            // isPointInRing thinks ring is not closed
+            ring.pop();
+        });
+
+        var result = [];
+        for (var i = 0; i < poly.length; i++) {
+            result.push(getRingSign(poly, i));
+        }
+        return result;
+    }
+
+    var minLatDelta = 0.00000000000001;
+    function getRingSign(poly, ringIndex) {
+        var ring = poly[ringIndex];
+        // looking for the bottomest vertex of the ring
+        var lowestPoint = ring[0];
+        ring.forEach(function (point) {
+            if (point[1] > lowestPoint[1]) {
+                lowestPoint = point;
+            }
+        });
+
+        // the point a biiit bottomer (exactly not inside our ring but not touching another ring)
+        lowestPoint[1] += minLatDelta;
+
+        // считаем контуры, внутри которых оказалась точка
+        var result = 1;
+        poly.forEach(function (ring) {
+            if (isPointInRing(lowestPoint[0], lowestPoint[1], ring)) {
+                result = -result;
+            }
+        });
+        return result;
+    }
+
+    function isPointInRing(x, y, ring) {
+        var i = 0;
+        var j = ring.length - 1;
+        var c = false;
+        for (; i < ring.length; i++) {
+            if ((ring[i][1] > y) !== (ring[j][1] > y) &&
+                (x < (ring[j][0] - ring[i][0]) * (y - ring[i][1]) / (ring[j][1] - ring[i][1]) + ring[i][0])) {
+                c = !c;
+            }
+            j = i;
+        }
+        return c;
     }
 
     provide(calculateArea);
